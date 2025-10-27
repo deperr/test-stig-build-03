@@ -1,0 +1,90 @@
+# .github/workflows/check-compliance-release.yml
+
+name: Check for new ComplianceAsCode Release
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # Runs once per week at 00:00 Sunday
+  workflow_dispatch: {}
+
+env:
+  # Configure the repos to watch
+  TARGET_REPO: "ComplianceAsCode/content" 
+  STATE_FILE: ".github/state/last_seen_release"
+  
+  # 1. The specific role directory to copy from the build output
+  # (e.g., "rhel9_stig", "rhel8_stig", etc. Look inside the 'out' dir to find the name)
+  SOURCE_ROLE_DIR: "rhel9_stig"
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to commit the state file AND new role to THIS repo
+      
+    steps:
+      - name: 🔔 Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Get latest release tag from ComplianceAsCode
+        id: get_release
+        run: |
+          TAG=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+          "https://api.github.com/repos/${{ env.TARGET_REPO }}/releases/latest" | jq -r .tag_name)
+          echo "Latest release on ${{ env.TARGET_REPO }} is: $TAG"
+          echo "latest_tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Get last processed tag from file
+        id: get_last_tag
+        run: |
+          if [ -f "${{ env.STATE_FILE }}" ]; then
+            echo "last_tag=$(cat ${{ env.STATE_FILE }})" >> $GITHUB_OUTPUT
+          else
+            echo "last_tag=''" >> $GITHUB_OUTPUT
+          fi
+        
+      - name: Compare, Build, and Generate Role
+        id: compare
+        if: steps.get_release.outputs.latest_tag != steps.get_last_tag.outputs.last_tag
+        run: |
+          echo "✅ New release found: ${{ steps.get_release.outputs.latest_tag }}"
+          
+          echo "Installing Dependencies"
+          sudo apt-get update
+          sudo apt-get install -y git cmake make openscap-common openscap-scanner python3-yaml \
+          python3-setuptools python3-pip python3-github libxml2-utils xsltproc
+          
+          echo "Cloning ComplianceAsCode/content"
+          git clone https://github.com/ComplianceAsCode/content
+          cd content
+          
+          echo "Checking out new release tag"
+          git checkout ${{ steps.get_release.outputs.latest_tag }}
+          
+          echo "Building rhel9 product"
+          ./build_product rhel9
+          
+          echo "Generating the Ansible role"
+          export PYTHONPATH=.
+          utils/ansible_playbook_to_role.py out --build-playbooks-dir build/ansible
+          
+          # Move back to the root of THIS repo
+          cd ..
+          
+          echo "Clean old role files and copy new role to root"
+          # This removes known Ansible role directories to ensure old files are deleted
+          rm -rf tasks/ defaults/ meta/ vars/ handlers/ files/ templates/ molecule/ README.md
+          
+          cp -r content/out/${{ env.SOURCE_ROLE_DIR }}/* .
+          
+          echo "Update the state file"
+          mkdir -p $(dirname "${{ env.STATE_FILE }}")
+          echo "${{ steps.get_release.outputs.latest_tag }}" > ${{ env.STATE_FILE }}
+          echo "new_release_found=true" >> $GITHUB_OUTPUT
+          
+      - name: Commit generated role and state file
+        if: steps.compare.outputs.new_release_found == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update last seen ComplianceAsCode release to ${{ steps.get_release.outputs.latest_tag }}"          
+          tagging_message: "auto-stig-${{ steps.get_release.outputs.latest_tag }}"
