@@ -66,7 +66,7 @@ jobs:
           
           echo "Generating the Ansible role"
           export PYTHONPATH=.
-          utils/ansible_playbook_to_role.py out --build-playbooks-dir build/ansible
+          utils/ansible_playbook_to_role.py --dry-run out --build-playbooks-dir build/ansible
           
           # Move back to the root of THIS repo
           cd ..
