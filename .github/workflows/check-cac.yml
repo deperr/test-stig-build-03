@@ -1,29 +1,32 @@
-# .github/workflows/check-compliance-release.yml
+# .github/workflows/check-cac.yml
 
 name: Check for new ComplianceAsCode Release
 
 on:
   schedule:
-    - cron: '0 0 * * 0' # Runs once per week at 00:00 Sunday
+    - cron: '0 2 5 * *' # Runs on the 5th of every month
   workflow_dispatch: {}
 
 env:
-  # Configure the repos to watch
+  # Configure repository to watch
   TARGET_REPO: "ComplianceAsCode/content" 
   STATE_FILE: ".github/state/last_seen_release"
+
+  # Space-separated list of role names to copy from the 'out' \
+  # directory (rhel9_stig, rhel9_cis, rhel9_anssi)
+  ROLES_TO_COPY: "rhel9_stig "
   
-  # 1. The specific role directory to copy from the build output
-  # (e.g., "rhel9_stig", "rhel8_stig", etc. Look inside the 'out' dir to find the name)
-  SOURCE_ROLE_DIR: "rhel9_stig"
+  # The directory in this repo to place the roles
+  ROLES_DIR: "roles"
 
 jobs:
   check-and-build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Needed to commit the state file AND new role to THIS repo
+      contents: write
       
     steps:
-      - name: 🔔 Check out this repository
+      - name: Check out this repository
         uses: actions/checkout@v4
 
       - name: Get latest release tag from ComplianceAsCode
@@ -43,7 +46,7 @@ jobs:
             echo "last_tag=''" >> $GITHUB_OUTPUT
           fi
         
-      - name: Compare, Build, and Generate Role
+      - name: Compare, Build, and Generate Collection
         id: compare
         if: steps.get_release.outputs.latest_tag != steps.get_last_tag.outputs.last_tag
         run: |
@@ -61,10 +64,9 @@ jobs:
           echo "Checking out new release tag"
           git checkout ${{ steps.get_release.outputs.latest_tag }}
           
-          echo "Building rhel9 product"
+          echo "Building the RHEL 9 roles"
+          # This one build generates all RHEL9 roles (stig, cis, etc.)
           ./build_product rhel9
-          
-          echo "Generating the Ansible role"
           export PYTHONPATH=.
           utils/ansible_playbook_to_role.py --dry-run out --build-playbooks-dir build/ansible
           
